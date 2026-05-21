@@ -1,0 +1,10 @@
+version: v2
+clean: true
+plugins:
+  # Invoke the protoc-gen-es JS entrypoint directly with node, avoiding
+  # the npm shim path-resolution issues on Windows.
+  - local: ["node", "node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es"]
+    out: src/gen
+    opt:
+      - target=ts
+      - import_extension=js

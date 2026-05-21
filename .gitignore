@@ -1,0 +1,38 @@
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+
+# Generated proto code
+ui/src/gen/
+
+# Tauri
+ui/src-tauri/target/
+ui/src-tauri/gen/schemas/
+
+# Rust
+**/target/
+
+# Logs
+*.log
+logs/
+
+# Local env
+.env
+.env.local
+appsettings.Local.json
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.idea/
+*.swp

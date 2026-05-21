@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package carpe_momentum.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "CarpeMomentum.Proto.V1";
+
+// Phase 0 smoke test. Proves the UI <-> Adapter boundary works end-to-end.
+// Will be replaced by the real services (MarketDataService, ScannerService,
+// OrderService, NewsService, SettingsService) in Phase 1.
+service PingService {
+  rpc Greet(GreetRequest) returns (GreetResponse);
+}
+
+message GreetRequest {
+  string name = 1;
+}
+
+message GreetResponse {
+  string message = 1;
+  string adapter_version = 2;
+  google.protobuf.Timestamp server_time = 3;
+}
