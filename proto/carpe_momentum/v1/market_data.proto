@@ -146,6 +146,10 @@ message StreamRealTimeBarsRequest {
   // If true, server emits updates as the current bar forms.
   // If false, only completed bars are sent.
   bool emit_partial_bars = 3;
+  // Include pre-market and after-hours bars. Honored for resolutions
+  // 10s through 1h (sourced from IBKR's reqRealTimeBars + adapter-side
+  // aggregation). Day1 ignores this flag — daily bars are session-bounded.
+  bool include_extended_hours = 4;
 }
 
 message StreamRealTimeBarsResponse {

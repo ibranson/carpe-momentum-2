@@ -68,11 +68,11 @@ try
     app.MapGet("/", (TwsConnection tws) =>
         "Carpe Momentum 2 Adapter — gRPC services at /carpe_momentum.v1.*\n" +
         $"TWS connection: {(tws.IsConnected ? "connected" : "not connected")}\n" +
-        "Implemented: PingService.Greet, MarketDataService.StreamQuotes\n" +
+        "Implemented: PingService.Greet, MarketDataService.{StreamQuotes,\n" +
+        "  GetHistoricalBars, StreamRealTimeBars}\n" +
         "Skeleton (returns Unimplemented): MarketDataService.{StreamLevel2,\n" +
-        "  StreamTimeAndSales, GetHistoricalBars, StreamRealTimeBars},\n" +
-        "  ScannerService, OrderService, NewsService, SettingsService\n" +
-        "  — see SPEC §5 Phase 1.");
+        "  StreamTimeAndSales}, ScannerService, OrderService, NewsService,\n" +
+        "  SettingsService — see SPEC §5 Phase 1.");
 
     Log.Information("Adapter listening on http://localhost:5000");
     await app.RunAsync();

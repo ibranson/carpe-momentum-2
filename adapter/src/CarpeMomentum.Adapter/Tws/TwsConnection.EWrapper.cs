@@ -81,9 +81,22 @@ public sealed partial class TwsConnection
         _logger.Log(level, "TWS [{Code}] (id={Id}) {Msg}", errorCode, id, errorMsg);
 
         // Route subscription-specific errors.
-        if (id > 0 && _quoteSubscriptions.TryGetValue(id, out var sub))
+        if (id > 0)
         {
-            sub.OnError(errorCode, errorMsg);
+            if (_quoteSubscriptions.TryGetValue(id, out var qsub))
+            {
+                qsub.OnError(errorCode, errorMsg);
+            }
+            if (_barSubscriptions.TryGetValue(id, out var bsub))
+            {
+                bsub.OnError(errorCode, errorMsg);
+                _barSubscriptions.TryRemove(id, out _);
+            }
+            if (_realtimeBarSubscriptions.TryGetValue(id, out var rsub))
+            {
+                rsub.OnError(errorCode, errorMsg);
+                _realtimeBarSubscriptions.TryRemove(id, out _);
+            }
         }
 
         // Hard connect failures (502 = couldn't connect, 504 = not connected).
@@ -193,12 +206,41 @@ public sealed partial class TwsConnection
     public void deltaNeutralValidation(int reqId, DeltaNeutralContract deltaNeutralContract) { }
 
     // =====================================================================
-    // Historical data — to be wired up in next session (GetHistoricalBars)
+    // Historical bars — Phase 1 (GetHistoricalBars + StreamRealTimeBars)
     // =====================================================================
 
-    public void historicalData(int reqId, Bar bar) { }
-    public void historicalDataUpdate(int reqId, Bar bar) { }
-    public void historicalDataEnd(int reqId, string start, string end) { }
+    public void historicalData(int reqId, Bar bar)
+    {
+        if (_barSubscriptions.TryGetValue(reqId, out var sub))
+        {
+            sub.OnBar(bar);
+        }
+    }
+
+    public void historicalDataUpdate(int reqId, Bar bar)
+    {
+        if (_barSubscriptions.TryGetValue(reqId, out var sub))
+        {
+            sub.OnUpdate(bar);
+        }
+    }
+
+    public void historicalDataEnd(int reqId, string start, string end)
+    {
+        if (_barSubscriptions.TryGetValue(reqId, out var sub))
+        {
+            sub.OnEnd();
+            // For one-shot fetches the subscription is now finished and
+            // SubscribeMethod removes it via the continuation. For live
+            // streams (keepUpToDate=true) we leave it in place — IBKR
+            // continues firing historicalDataUpdate after this signal.
+            if (sub.IsOneShot)
+            {
+                _barSubscriptions.TryRemove(reqId, out _);
+            }
+        }
+    }
+
     public void historicalSchedule(int reqId, string startDateTime, string endDateTime, string timeZone,
         HistoricalSession[] sessions) { }
     public void historicalTicks(int reqId, HistoricalTick[] ticks, bool done) { }
@@ -208,11 +250,20 @@ public sealed partial class TwsConnection
     public void histogramData(int reqId, HistogramEntry[] data) { }
 
     // =====================================================================
-    // Real-time bars — next session (StreamRealTimeBars)
+    // Real-time bars — Phase 1 (StreamRealTimeBars, aggregation path)
     // =====================================================================
 
+    // IBKR delivers fixed 5-second bars regardless of subscription
+    // settings; AggregatedBarsSubscription buckets them into the
+    // client-requested resolution.
     public void realtimeBar(int reqId, long date, double open, double high, double low, double close,
-        decimal volume, decimal WAP, int count) { }
+        decimal volume, decimal WAP, int count)
+    {
+        if (_realtimeBarSubscriptions.TryGetValue(reqId, out var sub))
+        {
+            sub.OnRealtimeBar(date, open, high, low, close, volume, WAP);
+        }
+    }
 
     // =====================================================================
     // Market depth (Level 2) — later session (StreamLevel2)

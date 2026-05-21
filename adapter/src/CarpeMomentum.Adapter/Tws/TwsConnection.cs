@@ -23,8 +23,11 @@ public sealed partial class TwsConnection : EWrapper, IDisposable
     private readonly EReaderMonitorSignal _signal;
     private readonly EClientSocket _client;
 
-    // Active subscription state.
+    // Active subscription state — keyed by IBKR reqId so EWrapper
+    // callbacks can route to the right consumer.
     private readonly ConcurrentDictionary<int, QuoteSubscription> _quoteSubscriptions = new();
+    private readonly ConcurrentDictionary<int, BarsSubscription> _barSubscriptions = new();
+    private readonly ConcurrentDictionary<int, AggregatedBarsSubscription> _realtimeBarSubscriptions = new();
 
     private EReader? _reader;
     private Thread? _readerThread;
@@ -151,6 +154,163 @@ public sealed partial class TwsConnection : EWrapper, IDisposable
             snapshot: false,
             regulatorySnaphsot: false,
             mktDataOptions: null);
+
+        return Task.CompletedTask;
+    }
+
+    // One-shot historical bars fetch. Awaits IBKR's historicalData/
+    // historicalDataEnd callback pair and returns the full list.
+    //
+    // IBKR enforces per-resolution data limits (e.g. ~1 day of 10-sec
+    // bars per call, ~1 month of 1-min bars). Larger ranges return a
+    // truncated result rather than an error.
+    public Task<IReadOnlyList<Proto.V1.Bar>> GetHistoricalBarsAsync(
+        string ticker,
+        Proto.V1.BarResolution resolution,
+        DateTime from,
+        DateTime to,
+        bool includeExtendedHours,
+        CancellationToken ct)
+    {
+        if (!_isConnected) throw new InvalidOperationException("TWS is not connected.");
+
+        var reqId = Interlocked.Increment(ref _nextRequestId);
+        var contract = BuildUsStockContract(ticker);
+        var subscription = BarsSubscription.ForHistoricalOneShot(ticker, resolution);
+        _barSubscriptions[reqId] = subscription;
+
+        var endDateTime = BarConversions.FormatIbkrEndDateTime(to);
+        var duration = BarConversions.ComputeDuration(from, to, resolution);
+        var barSize = BarConversions.ToIbkrBarSize(resolution);
+
+        _logger.LogDebug(
+            "reqHistoricalData (one-shot) id={ReqId} ticker={Ticker} barSize={BarSize} duration={Duration} end={End}",
+            reqId, ticker, barSize, duration, endDateTime);
+
+        ct.Register(() =>
+        {
+            try { _client.cancelHistoricalData(reqId); } catch { /* swallow */ }
+            _barSubscriptions.TryRemove(reqId, out _);
+        });
+
+        _client.reqHistoricalData(
+            tickerId: reqId,
+            contract: contract,
+            endDateTime: endDateTime,
+            durationStr: duration,
+            barSizeSetting: barSize,
+            whatToShow: "TRADES",
+            useRTH: includeExtendedHours ? 0 : 1,
+            formatDate: 2,         // epoch seconds — uniform parsing
+            keepUpToDate: false,
+            chartOptions: null);
+
+        return subscription.CompletionTask!
+            .ContinueWith(t =>
+            {
+                _barSubscriptions.TryRemove(reqId, out _);
+                return t.Result;
+            }, ct, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    // Live bar stream. Dispatches based on resolution:
+    //   • 10s through 1h → reqRealTimeBars + adapter-side aggregation.
+    //     Supports extended hours.
+    //   • Day1 → reqHistoricalData(keepUpToDate=true). RTH only (daily
+    //     bars are session-bounded anyway, so the limitation doesn't bite).
+    public Task SubscribeRealTimeBarsAsync(
+        string ticker,
+        Proto.V1.BarResolution resolution,
+        bool emitPartialBars,
+        bool includeExtendedHours,
+        ChannelWriter<Proto.V1.Bar> writer,
+        CancellationToken ct)
+    {
+        if (!_isConnected) throw new InvalidOperationException("TWS is not connected.");
+
+        if (resolution == Proto.V1.BarResolution.Day1)
+        {
+            return SubscribeRealTimeBarsViaHistoricalAsync(ticker, resolution, emitPartialBars, writer, ct);
+        }
+
+        return SubscribeRealTimeBarsViaAggregationAsync(
+            ticker, resolution, emitPartialBars, includeExtendedHours, writer, ct);
+    }
+
+    // 10s through 1h: IBKR delivers 5-second realtime bars via the
+    // `realtimeBar` EWrapper callback (extended-hours capable). The
+    // adapter buckets them into the target resolution.
+    private Task SubscribeRealTimeBarsViaAggregationAsync(
+        string ticker,
+        Proto.V1.BarResolution resolution,
+        bool emitPartialBars,
+        bool includeExtendedHours,
+        ChannelWriter<Proto.V1.Bar> writer,
+        CancellationToken ct)
+    {
+        var reqId = Interlocked.Increment(ref _nextRequestId);
+        var contract = BuildUsStockContract(ticker);
+        var subscription = new AggregatedBarsSubscription(ticker, resolution, writer, emitPartialBars);
+        _realtimeBarSubscriptions[reqId] = subscription;
+
+        _logger.LogDebug(
+            "reqRealTimeBars id={ReqId} ticker={Ticker} resolution={Resolution} extHours={Ext}",
+            reqId, ticker, resolution, includeExtendedHours);
+
+        ct.Register(() =>
+        {
+            try { _client.cancelRealTimeBars(reqId); } catch { /* swallow */ }
+            _realtimeBarSubscriptions.TryRemove(reqId, out _);
+        });
+
+        _client.reqRealTimeBars(
+            tickerId: reqId,
+            contract: contract,
+            barSize: 5,                  // only valid value for reqRealTimeBars
+            whatToShow: "TRADES",
+            useRTH: !includeExtendedHours,   // bool here, NOT int (cf. reqHistoricalData)
+            realTimeBarsOptions: null);
+
+        return Task.CompletedTask;
+    }
+
+    // Day1: aggregating 17280 five-second bars per session is silly, so
+    // use IBKR's native daily bars via reqHistoricalData(keepUpToDate=true).
+    // Note IBKR enforces useRTH=1 here — extended hours flag is ignored.
+    private Task SubscribeRealTimeBarsViaHistoricalAsync(
+        string ticker,
+        Proto.V1.BarResolution resolution,
+        bool emitPartialBars,
+        ChannelWriter<Proto.V1.Bar> writer,
+        CancellationToken ct)
+    {
+        var reqId = Interlocked.Increment(ref _nextRequestId);
+        var contract = BuildUsStockContract(ticker);
+        var subscription = BarsSubscription.ForLiveStream(ticker, resolution, writer, emitPartialBars);
+        _barSubscriptions[reqId] = subscription;
+
+        var barSize = BarConversions.ToIbkrBarSize(resolution);
+        _logger.LogDebug(
+            "reqHistoricalData (keepUpToDate) id={ReqId} ticker={Ticker} barSize={BarSize}",
+            reqId, ticker, barSize);
+
+        ct.Register(() =>
+        {
+            try { _client.cancelHistoricalData(reqId); } catch { /* swallow */ }
+            _barSubscriptions.TryRemove(reqId, out _);
+        });
+
+        _client.reqHistoricalData(
+            tickerId: reqId,
+            contract: contract,
+            endDateTime: "",
+            durationStr: "5 D",          // 5-day seed for daily bars
+            barSizeSetting: barSize,
+            whatToShow: "TRADES",
+            useRTH: 1,
+            formatDate: 2,
+            keepUpToDate: true,
+            chartOptions: null);
 
         return Task.CompletedTask;
     }
