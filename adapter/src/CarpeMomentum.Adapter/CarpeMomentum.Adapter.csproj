@@ -5,12 +5,30 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>CarpeMomentum.Adapter</RootNamespace>
+
+    <!-- TWS API location. Override with `-p:TwsApiPath=...` or set the
+         TwsApiPath env var if your IBKR TWS API is installed elsewhere.
+         The DLL referenced below is the netstandard2.0 build that ships
+         (or that you build once via `dotnet build` in the IBKR project). -->
+    <TwsApiPath Condition="'$(TwsApiPath)' == ''">C:\TWS API</TwsApiPath>
+    <TwsApiDll>$(TwsApiPath)\source\CSharpClient\client\bin\Debug\netstandard2.0\CSharpAPI.dll</TwsApiDll>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Grpc.AspNetCore" Version="2.66.0" />
     <PackageReference Include="Grpc.AspNetCore.Web" Version="2.66.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="8.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- IBKR TWS API. Not on NuGet; ships with the TWS API installer.
+         If $(TwsApiDll) doesn't exist, build it once from the source:
+           dotnet build "$(TwsApiPath)\source\CSharpClient\client\CSharpAPI.csproj"
+    -->
+    <Reference Include="CSharpAPI">
+      <HintPath>$(TwsApiDll)</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

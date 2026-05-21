@@ -1,4 +1,5 @@
 using CarpeMomentum.Adapter.Services;
+using CarpeMomentum.Adapter.Tws;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Serilog;
 
@@ -24,6 +25,12 @@ try
             listenOpts.Protocols = HttpProtocols.Http1AndHttp2;
         });
     });
+
+    // TWS connection — singleton, owned by TwsHostedService for its lifetime.
+    builder.Services.Configure<TwsConnectionOptions>(
+        builder.Configuration.GetSection(TwsConnectionOptions.SectionName));
+    builder.Services.AddSingleton<TwsConnection>();
+    builder.Services.AddHostedService<TwsHostedService>();
 
     builder.Services.AddGrpc();
 
@@ -58,11 +65,14 @@ try
     app.MapGrpcService<NewsServiceImpl>();
     app.MapGrpcService<SettingsServiceImpl>();
 
-    app.MapGet("/", () =>
+    app.MapGet("/", (TwsConnection tws) =>
         "Carpe Momentum 2 Adapter — gRPC services at /carpe_momentum.v1.*\n" +
-        "Implemented: PingService.Greet (Phase 0 smoke test)\n" +
-        "Skeleton (returns Unimplemented): MarketDataService, ScannerService,\n" +
-        "  OrderService, NewsService, SettingsService — see SPEC §5 Phase 1.");
+        $"TWS connection: {(tws.IsConnected ? "connected" : "not connected")}\n" +
+        "Implemented: PingService.Greet, MarketDataService.StreamQuotes\n" +
+        "Skeleton (returns Unimplemented): MarketDataService.{StreamLevel2,\n" +
+        "  StreamTimeAndSales, GetHistoricalBars, StreamRealTimeBars},\n" +
+        "  ScannerService, OrderService, NewsService, SettingsService\n" +
+        "  — see SPEC §5 Phase 1.");
 
     Log.Information("Adapter listening on http://localhost:5000");
     await app.RunAsync();
