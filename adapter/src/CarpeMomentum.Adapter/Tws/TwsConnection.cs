@@ -28,6 +28,7 @@ public sealed partial class TwsConnection : EWrapper, IDisposable
     private readonly ConcurrentDictionary<int, QuoteSubscription> _quoteSubscriptions = new();
     private readonly ConcurrentDictionary<int, BarsSubscription> _barSubscriptions = new();
     private readonly ConcurrentDictionary<int, AggregatedBarsSubscription> _realtimeBarSubscriptions = new();
+    private readonly ConcurrentDictionary<int, ScannerSnapshotSubscription> _scannerSubscriptions = new();
 
     private EReader? _reader;
     private Thread? _readerThread;
@@ -312,6 +313,55 @@ public sealed partial class TwsConnection : EWrapper, IDisposable
             keepUpToDate: true,
             chartOptions: null);
 
+        return Task.CompletedTask;
+    }
+
+    // Subscribe to an IBKR market scanner. The default scan is
+    // TOP_PERC_GAIN with Ross-Cameron price/volume filters applied — this
+    // narrows the universe to symbols the 5-Pillar evaluator might pass.
+    //
+    // IBKR re-runs the scan periodically (~30s) and the cycle delivers
+    // a fresh batch of scannerData callbacks followed by scannerDataEnd.
+    // Each batch arrives on the writer as a snapshot list.
+    public Task SubscribeScannerAsync(
+        ChannelWriter<IReadOnlyList<Scanner.ScannerCandidate>> writer,
+        CancellationToken ct)
+    {
+        if (!_isConnected) throw new InvalidOperationException("TWS is not connected.");
+
+        var reqId = Interlocked.Increment(ref _nextRequestId);
+        var subscription = new ScannerSnapshotSubscription(writer);
+        _scannerSubscriptions[reqId] = subscription;
+
+        var scannerSub = new IBApi.ScannerSubscription
+        {
+            Instrument = "STK",
+            LocationCode = "STK.US.MAJOR",   // major US exchanges (NYSE, NASDAQ, AMEX)
+            ScanCode = "TOP_PERC_GAIN",
+            NumberOfRows = 50,
+
+            // Ross-Cameron base filters (also enforced by the evaluator,
+            // but pre-filtering at the scanner reduces noise).
+            AbovePrice = 1.0,
+            BelowPrice = 20.0,
+            AboveVolume = 1_000_000,
+        };
+
+        _logger.LogInformation(
+            "reqScannerSubscription id={ReqId} scan=TOP_PERC_GAIN rows={Rows}",
+            reqId, scannerSub.NumberOfRows);
+
+        ct.Register(() =>
+        {
+            try { _client.cancelScannerSubscription(reqId); } catch { /* swallow */ }
+            _scannerSubscriptions.TryRemove(reqId, out _);
+        });
+
+        _client.reqScannerSubscription(
+            reqId,
+            scannerSub,
+            scannerSubscriptionOptions: (List<TagValue>?)null,
+            scannerSubscriptionFilterOptions: (List<TagValue>?)null);
         return Task.CompletedTask;
     }
 

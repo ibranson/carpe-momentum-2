@@ -97,6 +97,11 @@ public sealed partial class TwsConnection
                 rsub.OnError(errorCode, errorMsg);
                 _realtimeBarSubscriptions.TryRemove(id, out _);
             }
+            if (_scannerSubscriptions.TryGetValue(id, out var ssub))
+            {
+                ssub.OnError(errorCode, errorMsg);
+                _scannerSubscriptions.TryRemove(id, out _);
+            }
         }
 
         // Hard connect failures (502 = couldn't connect, 504 = not connected).
@@ -299,13 +304,36 @@ public sealed partial class TwsConnection
     public void historicalNewsEnd(int requestId, bool hasMore) { }
 
     // =====================================================================
-    // Scanner — later session (ScannerService)
+    // Scanner — Phase 1 (ScannerService.StreamQualifyingSymbols)
     // =====================================================================
 
-    public void scannerParameters(string xml) { }
+    // IBKR delivers one callback per scanner match (with rank), then a
+    // single scannerDataEnd at the end of the snapshot. We accumulate
+    // matches in the subscription object and flush on End.
     public void scannerData(int reqId, int rank, ContractDetails contractDetails, string distance,
-        string benchmark, string projection, string legsStr) { }
-    public void scannerDataEnd(int reqId) { }
+        string benchmark, string projection, string legsStr)
+    {
+        if (_scannerSubscriptions.TryGetValue(reqId, out var sub))
+        {
+            sub.OnCandidate(rank, contractDetails, distance);
+        }
+    }
+
+    public void scannerDataEnd(int reqId)
+    {
+        if (_scannerSubscriptions.TryGetValue(reqId, out var sub))
+        {
+            sub.OnEnd();
+        }
+    }
+
+    // scannerParameters returns a large XML blob describing every
+    // available scan code, filter, and instrument. We don't need it
+    // at runtime (our scan codes are hardcoded); log size only.
+    public void scannerParameters(string xml)
+    {
+        _logger.LogDebug("scannerParameters xml length={Length}", xml?.Length ?? 0);
+    }
 
     // =====================================================================
     // Fundamental / metadata — not in v1 scope
