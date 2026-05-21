@@ -1,0 +1,190 @@
+syntax = "proto3";
+
+package carpe_momentum.v1;
+
+import "google/protobuf/timestamp.proto";
+import "carpe_momentum/v1/pillar.proto";
+
+option csharp_namespace = "CarpeMomentum.Proto.V1";
+
+// Persisted user settings — one method pair per config domain. Every
+// Get/Update method has its own *Response wrapper so wrapper-level
+// fields can be added later without breaking the inner config type.
+// StreamConfigChanges fans changes out to every open window so settings
+// tweaks in one window propagate instantly.
+service SettingsService {
+  // 5-Pillar thresholds + weights.
+  rpc GetPillarConfig(GetPillarConfigRequest) returns (GetPillarConfigResponse);
+  rpc UpdatePillarConfig(UpdatePillarConfigRequest) returns (UpdatePillarConfigResponse);
+
+  // Position sizing defaults by price band.
+  rpc GetSizingConfig(GetSizingConfigRequest) returns (GetSizingConfigResponse);
+  rpc UpdateSizingConfig(UpdateSizingConfigRequest) returns (UpdateSizingConfigResponse);
+
+  // Daily risk advisory thresholds.
+  rpc GetRiskConfig(GetRiskConfigRequest) returns (GetRiskConfigResponse);
+  rpc UpdateRiskConfig(UpdateRiskConfigRequest) returns (UpdateRiskConfigResponse);
+
+  // Sound-per-alert-source mappings.
+  rpc GetAlertConfig(GetAlertConfigRequest) returns (GetAlertConfigResponse);
+  rpc UpdateAlertConfig(UpdateAlertConfigRequest) returns (UpdateAlertConfigResponse);
+
+  // Chart pattern detection toggles + tunable thresholds.
+  rpc GetPatternConfig(GetPatternConfigRequest) returns (GetPatternConfigResponse);
+  rpc UpdatePatternConfig(UpdatePatternConfigRequest) returns (UpdatePatternConfigResponse);
+
+  // News provider enable flags + per-provider feed selections.
+  rpc GetNewsProviderConfig(GetNewsProviderConfigRequest) returns (GetNewsProviderConfigResponse);
+  rpc UpdateNewsProviderConfig(UpdateNewsProviderConfigRequest) returns (UpdateNewsProviderConfigResponse);
+
+  // Broadcast of config changes — UI windows subscribe so settings
+  // edits in the Settings window propagate to all other windows.
+  rpc StreamConfigChanges(StreamConfigChangesRequest) returns (stream StreamConfigChangesResponse);
+}
+
+// ---- Pillar config (PillarConfig type defined in pillar.proto) ----
+
+message GetPillarConfigRequest {}
+message GetPillarConfigResponse { PillarConfig config = 1; }
+message UpdatePillarConfigRequest { PillarConfig config = 1; }
+message UpdatePillarConfigResponse { PillarConfig config = 1; }
+
+// ---- Sizing config ----
+
+message GetSizingConfigRequest {}
+message GetSizingConfigResponse { SizingConfig config = 1; }
+message UpdateSizingConfigRequest { SizingConfig config = 1; }
+message UpdateSizingConfigResponse { SizingConfig config = 1; }
+
+message SizingConfig {
+  // Default shares to enter when the focused symbol is in a given price band.
+  // Bands should be ordered low-to-high and non-overlapping; the adapter
+  // picks the first match.
+  repeated PriceBandSize price_band_sizes = 1;
+  // Default trail offset for one-keystroke trailing-stop actions.
+  optional int64 default_trail_offset_micros = 2;
+}
+
+message PriceBandSize {
+  int64 price_min_micros = 1;
+  int64 price_max_micros = 2;
+  int64 default_shares = 3;
+}
+
+// ---- Risk config ----
+
+message GetRiskConfigRequest {}
+message GetRiskConfigResponse { RiskConfig config = 1; }
+message UpdateRiskConfigRequest { RiskConfig config = 1; }
+message UpdateRiskConfigResponse { RiskConfig config = 1; }
+
+message RiskConfig {
+  // Soft daily loss limit. ADVISORY ONLY — adapter never blocks orders.
+  int64 daily_soft_limit_micros = 1;
+  // Fraction of limit at which UI turns yellow (e.g. 0.50).
+  double yellow_threshold = 2;
+  // Fraction of limit at which UI turns red (e.g. 0.90).
+  double red_threshold = 3;
+}
+
+// ---- Alert config ----
+
+message GetAlertConfigRequest {}
+message GetAlertConfigResponse { AlertConfig config = 1; }
+message UpdateAlertConfigRequest { AlertConfig config = 1; }
+message UpdateAlertConfigResponse { AlertConfig config = 1; }
+
+message AlertConfig {
+  AlertSoundAssignment running_up = 1;
+  AlertSoundAssignment quality_crossover = 2;
+  AlertSoundAssignment halt = 3;
+
+  // Exit-side nudges — these only fire when current position size > 0.
+  AlertSoundAssignment pillar_regression = 4;
+  AlertSoundAssignment vwap_loss = 5;
+  AlertSoundAssignment quality_drop = 6;
+
+  // Global gain on all alert sounds [0.0, 1.0].
+  double master_volume = 7;
+  bool muted = 8;
+}
+
+message AlertSoundAssignment {
+  bool enabled = 1;
+  // Absolute path to a user-supplied .wav. Empty string = use the built-in
+  // default sound for that source.
+  string sound_path = 2;
+}
+
+// ---- Pattern config ----
+
+message GetPatternConfigRequest {}
+message GetPatternConfigResponse { PatternConfig config = 1; }
+message UpdatePatternConfigRequest { PatternConfig config = 1; }
+message UpdatePatternConfigResponse { PatternConfig config = 1; }
+
+message PatternConfig {
+  VwapReclaimSettings vwap_reclaim = 1;
+  FirstPullbackSettings first_pullback = 2;
+  BullFlagSettings bull_flag = 3;
+  bool show_hod_line = 4;
+  bool show_premarket_high_line = 5;
+  bool show_halt_resume_markers = 6;
+  bool show_catalyst_markers = 7;
+}
+
+message VwapReclaimSettings {
+  bool enabled = 1;
+  int32 min_bars_below = 2;
+  double min_volume_multiplier = 3;
+}
+
+message FirstPullbackSettings {
+  bool enabled = 1;
+  int32 min_pullback_bars = 2;
+}
+
+message BullFlagSettings {
+  bool enabled = 1;
+  int32 min_consolidation_bars = 2;
+  double max_range_percent = 3;       // 0.05 = 5%
+}
+
+// ---- News provider config ----
+
+message GetNewsProviderConfigRequest {}
+message GetNewsProviderConfigResponse { NewsProviderConfig config = 1; }
+message UpdateNewsProviderConfigRequest { NewsProviderConfig config = 1; }
+message UpdateNewsProviderConfigResponse { NewsProviderConfig config = 1; }
+
+message NewsProviderConfig {
+  bool ibkr_enabled = 1;
+  // IBKR feed codes the user is subscribed to. e.g. ["BRFG", "DJ-N", "RSF-ALL"].
+  repeated string ibkr_feed_codes = 2;
+  // Reserved for future Benzinga Pro integration (v1 always false).
+  bool benzinga_pro_enabled = 3;
+  optional string benzinga_api_key = 4;
+}
+
+// ---- Config change broadcast ----
+
+message StreamConfigChangesRequest {}
+
+message StreamConfigChangesResponse {
+  ConfigChangeNotification notification = 1;
+}
+
+message ConfigChangeNotification {
+  google.protobuf.Timestamp ts = 1;
+  ConfigDomain domain = 2;
+}
+
+enum ConfigDomain {
+  CONFIG_DOMAIN_UNSPECIFIED = 0;
+  CONFIG_DOMAIN_PILLAR = 1;
+  CONFIG_DOMAIN_SIZING = 2;
+  CONFIG_DOMAIN_RISK = 3;
+  CONFIG_DOMAIN_ALERT = 4;
+  CONFIG_DOMAIN_PATTERN = 5;
+  CONFIG_DOMAIN_NEWS_PROVIDER = 6;
+}

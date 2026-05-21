@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package carpe_momentum.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "carpe_momentum/v1/common.proto";
+
+option csharp_namespace = "CarpeMomentum.Proto.V1";
+
+// News and symbol metadata. v1 sources from IBKR's bundled news feeds
+// (BRFG, DJ-N, RSF-ALL); the provider abstraction here is what lets
+// Benzinga Pro slot in later as a paid upgrade — per the user's
+// "subscription dollars saved from DTD go to better data sourcing" stance.
+service NewsService {
+  // Real-time headlines for a set of tickers, multiplexed across all
+  // enabled providers.
+  rpc StreamHeadlines(StreamHeadlinesRequest) returns (stream StreamHeadlinesResponse);
+
+  // Static symbol metadata for the Stock Quote panel.
+  // Cached server-side; refreshed on a slow cadence.
+  rpc GetSymbolMetadata(GetSymbolMetadataRequest) returns (GetSymbolMetadataResponse);
+
+  // Recent news for a single ticker (Stock Quote "latest news" section).
+  rpc GetRecentNews(GetRecentNewsRequest) returns (GetRecentNewsResponse);
+}
+
+// ---- StreamHeadlines ----
+
+message StreamHeadlinesRequest {
+  repeated string tickers = 1;
+  // Optional whitelist of provider codes (e.g. "IBKR_BRFG", "BENZINGA").
+  // Empty = all enabled providers (see SettingsService.NewsProviderConfig).
+  repeated string providers = 2;
+}
+
+message StreamHeadlinesResponse {
+  NewsItem item = 1;
+}
+
+message NewsItem {
+  string id = 1;
+  google.protobuf.Timestamp ts = 2;
+  // Provider code: e.g. "IBKR_BRFG", "IBKR_DJ-N", "BENZINGA".
+  string provider = 3;
+  repeated string tickers = 4;
+  string headline = 5;
+  optional string url = 6;
+  optional string body_snippet = 7;
+  optional CatalystCategory category = 8;
+  // Provider-supplied sentiment in [-1.0, +1.0] if available.
+  optional double sentiment = 9;
+}
+
+// ---- GetSymbolMetadata ----
+
+message GetSymbolMetadataRequest {
+  string ticker = 1;
+}
+
+message GetSymbolMetadataResponse {
+  SymbolMetadata metadata = 1;
+}
+
+// Drives the Stock Quote card's flag/sector glyphs (per the user's
+// "Both — visual glyphs across the board" choice).
+message SymbolMetadata {
+  string ticker = 1;
+  string company_name = 2;
+  // ISO 3166-1 alpha-2 for the flag glyph (e.g. "US", "CN", "BR").
+  string country_code = 3;
+  // Exchange code: NASDAQ, NYSE, ARCA, OTC, etc. — drives the exchange glyph.
+  string exchange = 4;
+  // GICS sector (Healthcare, Technology, Energy, etc.) — drives sector glyph.
+  string sector = 5;
+  // GICS sub-industry (Biotech, Software-Application, etc.).
+  string industry = 6;
+  optional int64 share_float = 7;
+  optional int64 shares_outstanding = 8;
+  optional int64 avg_daily_volume = 9;
+  // Percent (0.15 = 15%); negative = data unavailable.
+  optional double short_interest_percent = 10;
+}
+
+// ---- GetRecentNews ----
+
+message GetRecentNewsRequest {
+  string ticker = 1;
+  int32 limit = 2;                                    // default 10 if zero
+  optional google.protobuf.Duration lookback = 3;     // default 72h
+}
+
+message GetRecentNewsResponse {
+  repeated NewsItem items = 1;
+}

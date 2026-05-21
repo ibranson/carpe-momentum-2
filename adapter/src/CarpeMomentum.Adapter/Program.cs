@@ -52,10 +52,17 @@ try
     app.UseGrpcWeb(new GrpcWebOptions { DefaultEnabled = true });
 
     app.MapGrpcService<PingServiceImpl>();
+    app.MapGrpcService<MarketDataServiceImpl>();
+    app.MapGrpcService<ScannerServiceImpl>();
+    app.MapGrpcService<OrderServiceImpl>();
+    app.MapGrpcService<NewsServiceImpl>();
+    app.MapGrpcService<SettingsServiceImpl>();
 
     app.MapGet("/", () =>
-        "Carpe Momentum 2 Adapter — gRPC at /carpe_momentum.v1.PingService\n" +
-        "Phase 0 hello-world. See docs/SPEC.md.");
+        "Carpe Momentum 2 Adapter — gRPC services at /carpe_momentum.v1.*\n" +
+        "Implemented: PingService.Greet (Phase 0 smoke test)\n" +
+        "Skeleton (returns Unimplemented): MarketDataService, ScannerService,\n" +
+        "  OrderService, NewsService, SettingsService — see SPEC §5 Phase 1.");
 
     Log.Information("Adapter listening on http://localhost:5000");
     await app.RunAsync();

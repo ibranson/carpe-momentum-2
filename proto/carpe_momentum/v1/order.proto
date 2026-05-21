@@ -1,0 +1,233 @@
+syntax = "proto3";
+
+package carpe_momentum.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "CarpeMomentum.Proto.V1";
+
+// Order entry, position tracking, and P&L streaming. Orders flow through
+// IBKR's order management on the adapter side.
+//
+// Per memory/project_stream_deck.md: Stops are manual (no auto-suggest);
+// brackets are available but never default; daily risk is advisory only
+// and lives in the Risk panel — the adapter does NOT refuse orders that
+// exceed the limit.
+service OrderService {
+  rpc SubmitOrder(SubmitOrderRequest) returns (SubmitOrderResponse);
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
+  rpc ModifyOrder(ModifyOrderRequest) returns (ModifyOrderResponse);
+
+  // Live order status updates (submit, partial fill, fill, cancel, reject).
+  rpc StreamOrderUpdates(StreamOrderUpdatesRequest) returns (stream StreamOrderUpdatesResponse);
+
+  // Open position state by ticker.
+  rpc StreamPositions(StreamPositionsRequest) returns (stream StreamPositionsResponse);
+
+  // Daily realized + unrealized P&L, plus advisory risk state for the
+  // Stream Deck's risk strip.
+  rpc StreamDailyPnL(StreamDailyPnLRequest) returns (stream StreamDailyPnLResponse);
+
+  // Emergency flatten — close all positions and optionally cancel all
+  // open orders. Hotkey-bindable from the Stream Deck.
+  rpc FlattenAll(FlattenAllRequest) returns (FlattenAllResponse);
+}
+
+// ---- SubmitOrder ----
+
+message SubmitOrderRequest {
+  string ticker = 1;
+  Side side = 2;
+  int64 quantity = 3;
+  OrderType order_type = 4;
+  optional int64 limit_price_micros = 5;   // required for LIMIT, STOP_LIMIT
+  optional int64 stop_price_micros = 6;    // required for STOP, STOP_LIMIT
+  optional int64 trail_offset_micros = 7;  // required for TRAIL, TRAIL_LIMIT
+  TimeInForce tif = 8;
+
+  // Client-supplied id for idempotency; retried submits return the same OrderId.
+  string client_order_id = 9;
+
+  // Optional OCA-linked stop and target legs (bracket order).
+  optional BracketLegs bracket = 10;
+}
+
+message SubmitOrderResponse {
+  string order_id = 1;
+  OrderStatusKind status = 2;
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+enum OrderType {
+  ORDER_TYPE_UNSPECIFIED = 0;
+  ORDER_TYPE_MARKET = 1;
+  ORDER_TYPE_LIMIT = 2;
+  ORDER_TYPE_STOP = 3;
+  ORDER_TYPE_STOP_LIMIT = 4;
+  ORDER_TYPE_TRAIL = 5;        // market on stop
+  ORDER_TYPE_TRAIL_LIMIT = 6;  // limit on stop
+}
+
+enum TimeInForce {
+  TIME_IN_FORCE_UNSPECIFIED = 0;
+  TIME_IN_FORCE_DAY = 1;
+  TIME_IN_FORCE_GTC = 2;       // Good 'til canceled
+  TIME_IN_FORCE_IOC = 3;       // Immediate or cancel
+  TIME_IN_FORCE_FOK = 4;       // Fill or kill
+  TIME_IN_FORCE_OPG = 5;       // At opening
+  TIME_IN_FORCE_CLO = 6;       // At close
+}
+
+message BracketLegs {
+  // Stop-loss leg.
+  int64 stop_price_micros = 1;
+  // If set, stop becomes a stop-limit at (stop_price - stop_limit_offset).
+  optional int64 stop_limit_offset_micros = 2;
+  // Profit-target leg. Omit for upside-uncapped runners (recommended for
+  // Ross-Cameron-style momentum trades).
+  optional int64 target_price_micros = 3;
+}
+
+enum OrderStatusKind {
+  ORDER_STATUS_KIND_UNSPECIFIED = 0;
+  ORDER_STATUS_KIND_PENDING_SUBMIT = 1;
+  ORDER_STATUS_KIND_SUBMITTED = 2;
+  ORDER_STATUS_KIND_PARTIALLY_FILLED = 3;
+  ORDER_STATUS_KIND_FILLED = 4;
+  ORDER_STATUS_KIND_CANCELLED = 5;
+  ORDER_STATUS_KIND_REJECTED = 6;
+  ORDER_STATUS_KIND_EXPIRED = 7;
+}
+
+// ---- CancelOrder ----
+
+message CancelOrderRequest {
+  string order_id = 1;
+}
+
+message CancelOrderResponse {
+  string order_id = 1;
+  OrderStatusKind status = 2;
+}
+
+// ---- ModifyOrder ----
+
+message ModifyOrderRequest {
+  string order_id = 1;
+  // Only fields that are set will be modified.
+  optional int64 quantity = 2;
+  optional int64 limit_price_micros = 3;
+  optional int64 stop_price_micros = 4;
+  optional int64 trail_offset_micros = 5;
+}
+
+message ModifyOrderResponse {
+  string order_id = 1;
+  OrderStatusKind status = 2;
+}
+
+// ---- StreamOrderUpdates ----
+
+message StreamOrderUpdatesRequest {
+  // Reserved.
+}
+
+message StreamOrderUpdatesResponse {
+  OrderStatus status = 1;
+}
+
+message OrderStatus {
+  string order_id = 1;
+  string client_order_id = 2;
+  string ticker = 3;
+  Side side = 4;
+  OrderType order_type = 5;
+  OrderStatusKind status = 6;
+  int64 quantity = 7;
+  int64 filled_quantity = 8;
+  optional int64 limit_price_micros = 9;
+  optional int64 stop_price_micros = 10;
+  optional int64 trail_offset_micros = 11;
+  optional int64 avg_fill_price_micros = 12;
+  google.protobuf.Timestamp submitted_ts = 13;
+  optional google.protobuf.Timestamp last_update_ts = 14;
+  optional string reject_reason = 15;
+}
+
+// ---- StreamPositions ----
+
+message StreamPositionsRequest {
+  // Reserved.
+}
+
+message StreamPositionsResponse {
+  PositionUpdate position = 1;
+}
+
+message PositionUpdate {
+  string ticker = 1;
+  google.protobuf.Timestamp ts = 2;
+  // Negative quantity = short position.
+  int64 quantity = 3;
+  int64 avg_cost_micros = 4;
+  int64 market_price_micros = 5;
+  int64 unrealized_pnl_micros = 6;
+  int64 realized_pnl_today_micros = 7;
+  // From avg cost; 0.0215 = +2.15%.
+  double percent_gain_from_cost = 8;
+}
+
+// ---- StreamDailyPnL ----
+
+message StreamDailyPnLRequest {
+  // Reserved.
+}
+
+message StreamDailyPnLResponse {
+  PnLUpdate pnl = 1;
+}
+
+message PnLUpdate {
+  google.protobuf.Timestamp ts = 1;
+  int64 daily_realized_micros = 2;
+  int64 daily_unrealized_micros = 3;
+  int64 daily_total_micros = 4;
+
+  // Advisory risk state — see Settings → RiskConfig for thresholds.
+  // The adapter does NOT block orders based on this; UI shows color
+  // and optional pulse but execution always proceeds.
+  int64 daily_soft_limit_micros = 5;
+  double percent_of_limit = 6;
+  RiskState risk_state = 7;
+}
+
+enum RiskState {
+  RISK_STATE_UNSPECIFIED = 0;
+  RISK_STATE_OK = 1;            // below yellow threshold
+  RISK_STATE_WARNING = 2;       // yellow band
+  RISK_STATE_CRITICAL = 3;      // red band
+  RISK_STATE_EXCEEDED = 4;      // over the soft limit
+}
+
+// ---- FlattenAll ----
+
+message FlattenAllRequest {
+  // If true, cancel all open orders too.
+  bool cancel_open_orders = 1;
+  // Optional confirmation token to prevent accidental flatten via misfire.
+  // Hotkey wiring is expected to require a hold-modifier; this is the
+  // last-line guard for IPC-level callers.
+  string confirm_token = 2;
+}
+
+message FlattenAllResponse {
+  int32 positions_flattened = 1;
+  int32 orders_cancelled = 2;
+  repeated string flatten_order_ids = 3;
+  repeated string cancelled_order_ids = 4;
+}

@@ -1,0 +1,167 @@
+syntax = "proto3";
+
+package carpe_momentum.v1;
+
+import "google/protobuf/timestamp.proto";
+import "carpe_momentum/v1/common.proto";
+
+option csharp_namespace = "CarpeMomentum.Proto.V1";
+
+// Real-time and historical market data sourced from IBKR TWS.
+// All prices are int64 micros (price * 1_000_000) to avoid FP rounding.
+//
+// Every RPC has a dedicated *Response message — even when it wraps a
+// single payload — so wrapper-level fields (e.g. snapshot_complete,
+// server_emission_ts) can be added later without breaking the inner type.
+service MarketDataService {
+  // Real-time bid/ask/last for a set of tickers. Cancel the stream to
+  // unsubscribe. Re-subscribe with a different set to change focus.
+  rpc StreamQuotes(StreamQuotesRequest) returns (stream StreamQuotesResponse);
+
+  // Market depth for a single ticker. Emits insert/update/delete deltas
+  // rather than full snapshots to reduce wire volume.
+  rpc StreamLevel2(StreamLevel2Request) returns (stream StreamLevel2Response);
+
+  // Time-and-sales tape. Optional size filter on the wire so the UI's
+  // "hide odd lots" toggle is enforced server-side.
+  rpc StreamTimeAndSales(StreamTimeAndSalesRequest) returns (stream StreamTimeAndSalesResponse);
+
+  // One-shot fetch of historical bars. Used by the TradingView chart
+  // datafeed on initial load and during pan/zoom into historical ranges.
+  rpc GetHistoricalBars(GetHistoricalBarsRequest) returns (GetHistoricalBarsResponse);
+
+  // Live extension of GetHistoricalBars — server emits new bars as they
+  // form, and optionally bar-in-progress updates for sub-bar latency.
+  rpc StreamRealTimeBars(StreamRealTimeBarsRequest) returns (stream StreamRealTimeBarsResponse);
+}
+
+// ---- StreamQuotes ----
+
+message StreamQuotesRequest {
+  repeated string tickers = 1;
+  // Subscribe to pre-market and after-hours quotes too.
+  bool include_extended_hours = 2;
+}
+
+message StreamQuotesResponse {
+  QuoteUpdate quote = 1;
+}
+
+// QuoteUpdate is sparse — only fields that changed since the last update
+// are populated. Cumulative state (volume, vwap) is always included.
+message QuoteUpdate {
+  string ticker = 1;
+  google.protobuf.Timestamp ts = 2;
+
+  optional int64 bid_micros = 3;
+  optional int64 ask_micros = 4;
+  optional int64 last_micros = 5;
+  optional int64 bid_size = 6;
+  optional int64 ask_size = 7;
+  optional int64 last_size = 8;
+  optional int64 cumulative_volume = 9;
+  optional int64 vwap_micros = 10;
+}
+
+// ---- StreamLevel2 ----
+
+message StreamLevel2Request {
+  string ticker = 1;
+  int32 num_levels = 2;  // default 5 if zero
+}
+
+message StreamLevel2Response {
+  Level2Update update = 1;
+}
+
+message Level2Update {
+  string ticker = 1;
+  google.protobuf.Timestamp ts = 2;
+  Level2Side side = 3;
+  int32 position = 4;     // 0 = top of book
+  Level2Operation operation = 5;
+  int64 price_micros = 6;
+  int64 size = 7;
+  optional string market_maker = 8;  // populated for NASDAQ TotalView etc.
+}
+
+enum Level2Side {
+  LEVEL2_SIDE_UNSPECIFIED = 0;
+  LEVEL2_SIDE_BID = 1;
+  LEVEL2_SIDE_ASK = 2;
+}
+
+enum Level2Operation {
+  LEVEL2_OPERATION_UNSPECIFIED = 0;
+  LEVEL2_OPERATION_INSERT = 1;
+  LEVEL2_OPERATION_UPDATE = 2;
+  LEVEL2_OPERATION_DELETE = 3;
+}
+
+// ---- StreamTimeAndSales ----
+
+message StreamTimeAndSalesRequest {
+  string ticker = 1;
+  // Drop prints below this size. Use 0 for no filter, 100 for "hide odd lots."
+  int64 min_size = 2;
+}
+
+message StreamTimeAndSalesResponse {
+  TradePrint print = 1;
+}
+
+message TradePrint {
+  string ticker = 1;
+  google.protobuf.Timestamp ts = 2;
+  int64 price_micros = 3;
+  int64 size = 4;
+  TradeAggressor aggressor = 5;
+  string venue = 6;                  // exchange code (NSDQ, NYSE, ARCA, etc.)
+  repeated string conditions = 7;    // TRF, ODD, FORM_T, etc.
+}
+
+enum TradeAggressor {
+  TRADE_AGGRESSOR_UNSPECIFIED = 0;
+  TRADE_AGGRESSOR_BUY = 1;
+  TRADE_AGGRESSOR_SELL = 2;
+}
+
+// ---- GetHistoricalBars / StreamRealTimeBars ----
+
+message GetHistoricalBarsRequest {
+  string ticker = 1;
+  BarResolution resolution = 2;
+  google.protobuf.Timestamp from = 3;   // inclusive
+  google.protobuf.Timestamp to = 4;     // exclusive
+  bool include_extended_hours = 5;
+}
+
+message GetHistoricalBarsResponse {
+  repeated Bar bars = 1;
+}
+
+message StreamRealTimeBarsRequest {
+  string ticker = 1;
+  BarResolution resolution = 2;
+  // If true, server emits updates as the current bar forms.
+  // If false, only completed bars are sent.
+  bool emit_partial_bars = 3;
+}
+
+message StreamRealTimeBarsResponse {
+  Bar bar = 1;
+}
+
+message Bar {
+  string ticker = 1;
+  google.protobuf.Timestamp open_time = 2;
+  BarResolution resolution = 3;
+  int64 open_micros = 4;
+  int64 high_micros = 5;
+  int64 low_micros = 6;
+  int64 close_micros = 7;
+  int64 volume = 8;
+  int64 vwap_micros = 9;       // session VWAP at this bar's close
+  // True if this bar is still forming (StreamRealTimeBars w/ partial bars).
+  bool is_partial = 10;
+}

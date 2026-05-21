@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package carpe_momentum.v1;
+
+import "google/protobuf/duration.proto";
+
+option csharp_namespace = "CarpeMomentum.Proto.V1";
+
+// PillarConfig: user-tunable thresholds and weights for the 5-Pillar
+// evaluator. Lives in this file because it's referenced by both the
+// scanner (as an inline override) and the settings service (as the
+// persisted user config). See memory/project_five_pillars.md for the
+// canonical defaults and the rationale behind each threshold.
+//
+// Money fields use int64 micros (price * 1_000_000) to avoid floating
+// point rounding accumulating in pillar evaluation.
+message PillarConfig {
+  // Hard thresholds — symbols outside these are excluded entirely.
+  int64 price_min_micros = 1;                          // default $1.00 = 1_000_000
+  int64 price_max_micros = 2;                          // default $20.00 = 20_000_000
+  double gain_min_percent = 3;                          // default 0.10 (10%)
+  int64 float_max_shares = 4;                           // default 20_000_000
+  double rvol_min = 5;                                  // default 5.0
+  google.protobuf.Duration catalyst_freshness = 6;      // default 72h
+
+  // Strength curve shapes — define the "strong" bands inside the hard
+  // thresholds. Inputs in the strong band score near 100; inputs outside
+  // scale down toward 0 (at the hard threshold edge).
+  PillarStrengthBands strength_bands = 7;
+
+  // Per-pillar weights used to aggregate strengths into Setup Quality.
+  // Weights are normalized server-side, so any positive values work.
+  PillarWeights weights = 8;
+}
+
+message PillarStrengthBands {
+  PriceBand price = 1;
+  GainBand gain = 2;
+  FloatBand share_float = 3;
+  RvolBand rvol = 4;
+}
+
+message PriceBand {
+  int64 strong_min_micros = 1;  // default $2.00
+  int64 strong_max_micros = 2;  // default $10.00
+}
+
+message GainBand {
+  double strong_min_percent = 1;        // default 0.20 (20%)
+  double exceptional_min_percent = 2;   // default 0.50 (50%) — beyond, reversal risk
+}
+
+message FloatBand {
+  int64 ideal_min_shares = 1;    // default 2_000_000
+  int64 ideal_max_shares = 2;    // default 10_000_000
+}
+
+message RvolBand {
+  double strong_min = 1;          // default 10.0
+  double explosive_min = 2;       // default 25.0
+}
+
+message PillarWeights {
+  double price = 1;          // default 0.20
+  double gain = 2;           // default 0.20
+  double share_float = 3;    // default 0.20
+  double rvol = 4;           // default 0.20
+  double catalyst = 5;       // default 0.20
+}

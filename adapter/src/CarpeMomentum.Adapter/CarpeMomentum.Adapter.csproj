@@ -14,10 +14,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="..\..\..\proto\carpe_momentum\v1\ping.proto"
+    <!-- Glob-include every .proto under /proto so new service files are
+         picked up automatically without csproj edits. -->
+    <Protobuf Include="..\..\..\proto\carpe_momentum\v1\*.proto"
               GrpcServices="Server"
               ProtoRoot="..\..\..\proto"
-              Link="Protos\carpe_momentum\v1\ping.proto" />
+              Link="Protos\carpe_momentum\v1\%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

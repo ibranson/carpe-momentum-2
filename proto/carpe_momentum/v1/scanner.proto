@@ -1,0 +1,156 @@
+syntax = "proto3";
+
+package carpe_momentum.v1;
+
+import "google/protobuf/timestamp.proto";
+import "carpe_momentum/v1/common.proto";
+import "carpe_momentum/v1/pillar.proto";
+
+option csharp_namespace = "CarpeMomentum.Proto.V1";
+
+// Scanner stream produced by the 5-Pillar evaluator running on top of
+// IBKR's underlying market scanner. The adapter sources candidates from
+// IBKR (top gainers, top losers, etc.), evaluates them against the
+// configured PillarConfig, and emits a QualityUpdate per (symbol, eval)
+// tick. See memory/project_five_pillars.md and memory/project_visualizations.md.
+service ScannerService {
+  // Continuous stream of qualifying symbols with per-pillar strengths +
+  // aggregate Setup Quality. Drives the Dashboard's 5-Pillars Scan panel,
+  // the Stream Deck header readout, and the chart's quality sparkline.
+  rpc StreamQualifyingSymbols(StreamQualifyingSymbolsRequest)
+    returns (stream StreamQualifyingSymbolsResponse);
+
+  // Momentum alerts ("Running Up" panel) — symbols making sudden moves.
+  // Also includes Setup Quality crossover events.
+  rpc StreamMomentumAlerts(StreamMomentumAlertsRequest)
+    returns (stream StreamMomentumAlertsResponse);
+
+  // LULD halt/resume events for the focused-symbol halt badge.
+  rpc StreamHaltEvents(StreamHaltEventsRequest)
+    returns (stream StreamHaltEventsResponse);
+
+  // Today's qualifying history for the 5-Pillars Timeline panel.
+  // Returns symbols that have qualified at any point during today's
+  // session, with their first/last-seen timestamps and peak strengths.
+  rpc GetTodaysQualifyingHistory(GetTodaysQualifyingHistoryRequest)
+    returns (GetTodaysQualifyingHistoryResponse);
+}
+
+// ---- StreamQualifyingSymbols ----
+
+message StreamQualifyingSymbolsRequest {
+  // If set, evaluates against this config instead of the persisted one.
+  // Use for ad-hoc filtering ("show me what'd qualify under tighter rules")
+  // without persisting the override.
+  optional PillarConfig override_config = 1;
+}
+
+message StreamQualifyingSymbolsResponse {
+  QualityUpdate update = 1;
+}
+
+message QualityUpdate {
+  string ticker = 1;
+  google.protobuf.Timestamp ts = 2;
+
+  // Snapshot of the inputs that produced this evaluation.
+  int64 last_price_micros = 3;
+  double percent_gain = 4;             // 0.47 = 47%
+  int64 share_float = 5;
+  double rvol = 6;
+  optional string catalyst_summary = 7;
+  optional google.protobuf.Timestamp catalyst_ts = 8;
+  optional CatalystCategory catalyst_category = 9;
+
+  // Per-pillar strength scores (0-100 each).
+  int32 price_strength = 10;
+  int32 gain_strength = 11;
+  int32 share_float_strength = 12;
+  int32 rvol_strength = 13;
+  int32 catalyst_strength = 14;
+
+  // Weighted aggregate (0-100).
+  int32 setup_quality = 15;
+
+  // Trend over the configured eval window.
+  Trend trend = 16;
+
+  // True if this evaluation crosses a Q threshold (configurable).
+  // The Dashboard's lightning glyph keys off this for ~N seconds.
+  bool quality_crossover = 17;
+}
+
+// ---- StreamMomentumAlerts ----
+
+message StreamMomentumAlertsRequest {
+  // Reserved for future filtering (e.g. min Setup Quality at alert time).
+}
+
+message StreamMomentumAlertsResponse {
+  MomentumAlert alert = 1;
+}
+
+message MomentumAlert {
+  string ticker = 1;
+  google.protobuf.Timestamp ts = 2;
+  MomentumAlertKind kind = 3;
+  // Human-readable reason for tooltips/logs.
+  string reason = 4;
+  // Snapshot of Setup Quality at alert time.
+  int32 setup_quality_at_alert = 5;
+}
+
+enum MomentumAlertKind {
+  MOMENTUM_ALERT_KIND_UNSPECIFIED = 0;
+  MOMENTUM_ALERT_KIND_RUNNING_UP = 1;
+  MOMENTUM_ALERT_KIND_QUALITY_CROSSOVER_UP = 2;
+  MOMENTUM_ALERT_KIND_QUALITY_CROSSOVER_DOWN = 3;
+}
+
+// ---- StreamHaltEvents ----
+
+message StreamHaltEventsRequest {
+  // If set, only emit events for these tickers. Empty = all tickers.
+  repeated string tickers = 1;
+}
+
+message StreamHaltEventsResponse {
+  HaltEvent event = 1;
+}
+
+message HaltEvent {
+  string ticker = 1;
+  google.protobuf.Timestamp ts = 2;
+  HaltEventKind kind = 3;
+  // LULD reason code (e.g. "LUDP", "M") from IBKR.
+  string reason_code = 4;
+  string reason_description = 5;
+  // Only set for HALT events; estimated time the halt will resume.
+  optional google.protobuf.Timestamp estimated_resume_ts = 6;
+}
+
+enum HaltEventKind {
+  HALT_EVENT_KIND_UNSPECIFIED = 0;
+  HALT_EVENT_KIND_HALT = 1;
+  HALT_EVENT_KIND_RESUME = 2;
+}
+
+// ---- GetTodaysQualifyingHistory ----
+
+message GetTodaysQualifyingHistoryRequest {
+  // Reserved.
+}
+
+message GetTodaysQualifyingHistoryResponse {
+  repeated QualifyingHistoryEntry entries = 1;
+}
+
+message QualifyingHistoryEntry {
+  string ticker = 1;
+  google.protobuf.Timestamp first_qualified_ts = 2;
+  google.protobuf.Timestamp last_seen_ts = 3;
+  int32 max_setup_quality = 4;
+  int32 current_setup_quality = 5;
+  bool currently_qualifying = 6;
+  PillarStrengthsSnapshot peak_strengths = 7;
+}

@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package carpe_momentum.v1;
+
+option csharp_namespace = "CarpeMomentum.Proto.V1";
+
+// Bar time resolution. SECONDS_10 is the finest grain CM2 routinely uses
+// (per SPEC §4, charts default to 10s and 5m intervals).
+enum BarResolution {
+  BAR_RESOLUTION_UNSPECIFIED = 0;
+  BAR_RESOLUTION_SECONDS_10 = 1;
+  BAR_RESOLUTION_MINUTE_1 = 2;
+  BAR_RESOLUTION_MINUTE_5 = 3;
+  BAR_RESOLUTION_MINUTE_15 = 4;
+  BAR_RESOLUTION_MINUTE_30 = 5;
+  BAR_RESOLUTION_HOUR_1 = 6;
+  BAR_RESOLUTION_DAY_1 = 7;
+}
+
+// Direction of Setup Quality over a recent evaluation window.
+// Used by the scanner row trend arrow and the Stream Deck header.
+enum Trend {
+  TREND_UNSPECIFIED = 0;
+  TREND_ACCELERATING = 1;   // up arrow doubled
+  TREND_RISING = 2;          // up arrow
+  TREND_FLAT = 3;            // sideways
+  TREND_DECAYING = 4;        // down arrow
+}
+
+// Category of a news catalyst — drives the news pillar's strength curve
+// and the Stock Quote panel's catalyst chip color.
+enum CatalystCategory {
+  CATALYST_CATEGORY_UNSPECIFIED = 0;
+  CATALYST_CATEGORY_EARNINGS = 1;
+  CATALYST_CATEGORY_FDA = 2;
+  CATALYST_CATEGORY_CONTRACT = 3;
+  CATALYST_CATEGORY_MERGER_ACQUISITION = 4;
+  CATALYST_CATEGORY_SECTOR = 5;
+  CATALYST_CATEGORY_ANALYST = 6;
+  CATALYST_CATEGORY_OTHER = 7;
+}
+
+// Frozen snapshot of all 5 pillar strengths (0-100 each).
+// Used in historical/timeline views where we want the peak strengths
+// without retransmitting the live QualityUpdate.
+message PillarStrengthsSnapshot {
+  int32 price_strength = 1;
+  int32 gain_strength = 2;
+  int32 share_float_strength = 3;
+  int32 rvol_strength = 4;
+  int32 catalyst_strength = 5;
+}
