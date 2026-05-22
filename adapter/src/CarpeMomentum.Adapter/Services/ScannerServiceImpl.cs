@@ -2,7 +2,6 @@ using System.Threading.Channels;
 using CarpeMomentum.Adapter.Scanner;
 using CarpeMomentum.Adapter.Tws;
 using CarpeMomentum.Proto.V1;
-using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 
 namespace CarpeMomentum.Adapter.Services;
@@ -11,27 +10,31 @@ public class ScannerServiceImpl : ScannerService.ScannerServiceBase
 {
     private readonly TwsConnection _tws;
     private readonly ILogger<ScannerServiceImpl> _logger;
+    private readonly ILoggerFactory _loggerFactory;
 
-    public ScannerServiceImpl(TwsConnection tws, ILogger<ScannerServiceImpl> logger)
+    public ScannerServiceImpl(
+        TwsConnection tws,
+        ILogger<ScannerServiceImpl> logger,
+        ILoggerFactory loggerFactory)
     {
         _tws = tws;
         _logger = logger;
+        _loggerFactory = loggerFactory;
     }
 
-    // Stream of qualifying symbols derived from IBKR's TOP_PERC_GAIN
-    // scanner + the 5-Pillar evaluator. v1 limitations (documented in
-    // memory/project_tws_integration.md):
+    // Stream of qualifying symbols backed by:
+    //   • IBKR TOP_PERC_GAIN scanner (the candidate funnel)
+    //   • Per-candidate market data subscriptions (live LastPrice, volume)
+    //   • One-shot 30-day daily bars per candidate (avg vol → RVOL, prev close)
+    //   • 5-Pillar evaluator → QualityUpdate emissions
     //
-    // • Only the Gain pillar has a real input (from the scanner's
-    //   `distance` field). Price/Float/RVOL/Catalyst are all "unknown"
-    //   (-1 sentinel on the wire) — future sessions will source these
-    //   via per-candidate market data subs, fundamentals, and news.
-    // • Each scanner refresh (~30s) re-emits QualityUpdate for every
-    //   candidate in the new snapshot. There's no "removed" event yet
-    //   when a symbol falls out of the scan; UI is expected to track
-    //   per-ticker freshness and age out stale rows.
-    // • Trend and QualityCrossover are not computed yet — they need
-    //   per-symbol Setup Quality history; deferred to a follow-up.
+    // Emission is debounced per-symbol to ~500ms so the UI gets smooth
+    // updates without per-tick spam.
+    //
+    // v1 limitations (see memory/project_tws_integration.md "Scanner pattern"):
+    //   • Float pillar still unknown (needs fundamentals)
+    //   • Catalyst pillar still unknown (needs news)
+    //   • Trend + QualityCrossover require per-symbol Q history — deferred
     public override async Task StreamQualifyingSymbols(
         StreamQualifyingSymbolsRequest request,
         IServerStreamWriter<StreamQualifyingSymbolsResponse> responseStream,
@@ -42,61 +45,32 @@ public class ScannerServiceImpl : ScannerService.ScannerServiceBase
         var config = request.OverrideConfig ?? DefaultPillarConfig.Create();
         var evaluator = new PillarEvaluator(config);
 
-        var snapshotChannel = Channel.CreateUnbounded<IReadOnlyList<ScannerCandidate>>(
+        // Output channel — the coordinator writes QualityUpdates here,
+        // and we drain it onto the gRPC stream below.
+        var output = Channel.CreateUnbounded<QualityUpdate>(
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
-        await _tws.SubscribeScannerAsync(snapshotChannel.Writer, context.CancellationToken);
+        var coordinator = new ScannerEnrichmentCoordinator(
+            _tws,
+            evaluator,
+            output.Writer,
+            _loggerFactory.CreateLogger<ScannerEnrichmentCoordinator>());
+
+        // Run the coordinator in the background; it completes the
+        // output channel when done.
+        var coordinatorTask = Task.Run(
+            () => coordinator.RunAsync(context.CancellationToken),
+            context.CancellationToken);
 
         _logger.LogInformation("StreamQualifyingSymbols started");
 
         try
         {
-            await foreach (var snapshot in snapshotChannel.Reader.ReadAllAsync(context.CancellationToken))
+            await foreach (var update in output.Reader.ReadAllAsync(context.CancellationToken))
             {
-                _logger.LogDebug("Scanner snapshot: {Count} candidates", snapshot.Count);
-
-                foreach (var candidate in snapshot)
-                {
-                    var inputs = new PillarInputs
-                    {
-                        Ticker = candidate.Ticker,
-                        LastPriceMicros = null,    // not in v1 — needs per-candidate mkt data sub
-                        PercentGain = candidate.PercentGain,
-                        ShareFloat = null,         // not in v1 — needs fundamentals
-                        Rvol = null,               // not in v1 — needs historical avg vol
-                        Catalyst = null,           // not in v1 — needs news integration
-                    };
-
-                    var eval = evaluator.Evaluate(inputs);
-
-                    var update = new QualityUpdate
-                    {
-                        Ticker = candidate.Ticker,
-                        Ts = Timestamp.FromDateTime(DateTime.UtcNow),
-
-                        // Input echo (0 = unknown by convention for these fields).
-                        LastPriceMicros = 0,
-                        PercentGain = candidate.PercentGain ?? 0,
-                        ShareFloat = 0,
-                        Rvol = 0,
-                        // CatalystSummary / CatalystTs / CatalystCategory left at proto defaults.
-
-                        // Per-pillar strengths (-1 = unknown sentinel).
-                        PriceStrength = eval.PriceStrength ?? -1,
-                        GainStrength = eval.GainStrength ?? -1,
-                        ShareFloatStrength = eval.ShareFloatStrength ?? -1,
-                        RvolStrength = eval.RvolStrength ?? -1,
-                        CatalystStrength = eval.CatalystStrength ?? -1,
-
-                        SetupQuality = eval.SetupQuality,
-                        Trend = Trend.Unspecified,    // requires history — deferred
-                        QualityCrossover = false,      // requires history — deferred
-                    };
-
-                    await responseStream.WriteAsync(
-                        new StreamQualifyingSymbolsResponse { Update = update },
-                        context.CancellationToken);
-                }
+                await responseStream.WriteAsync(
+                    new StreamQualifyingSymbolsResponse { Update = update },
+                    context.CancellationToken);
             }
         }
         catch (OperationCanceledException)
@@ -105,6 +79,10 @@ public class ScannerServiceImpl : ScannerService.ScannerServiceBase
         }
         finally
         {
+            try { await coordinatorTask; }
+            catch (OperationCanceledException) { /* normal */ }
+            catch (Exception ex) { _logger.LogWarning(ex, "Coordinator task threw"); }
+            await coordinator.DisposeAsync();
             _logger.LogInformation("StreamQualifyingSymbols ended");
         }
     }
